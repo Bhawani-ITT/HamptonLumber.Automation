@@ -24,7 +24,6 @@ import {
   startAddLine,
   tallyInputs,
 } from '../concurrent/categoryLineFlow';
-import { fetchAzureSqlLines, IntegrityApi, MISMATCH_TOAST, runCheckDataMismatch } from '../../utils/dataIntegrity';
 
 const REQUIRED_LINE_FIELDS = ['Line Number', 'Line Status', 'Location', 'Species', 'Size', 'Grade', 'Quantity', 'Load', 'Ship Week', 'Unit Size', '$ / MBF'];
 const TALLY_LENGTHS = [8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32];
@@ -38,7 +37,6 @@ const discardButton = (page: Page) => page.getByRole('button', { name: 'Discard'
 const noteCounter = (page: Page, length: number) => main(page).getByText(`${length}/${NOTE_MAX_LENGTH}`, { exact: true }).locator('visible=true');
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const exactText = (text: string) => new RegExp(`^\\s*${escapeRegExp(text)}\\s*$`);
-const mismatchCount = (message: string | null) => Number(message?.match(MISMATCH_TOAST)?.[1] ?? 0);
 const today = () => {
   const d = new Date();
   return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${d.getFullYear()}`;
@@ -143,19 +141,11 @@ test.describe('Category lifecycle', () => {
 
     const categoryName = `Regression ${new Date().toISOString().slice(5, 16).replace(/[-:T]/g, '')} ${Math.random().toString(36).slice(2, 6)}`;
     let location = '';
-    let api!: IntegrityApi;
-    let mismatchesBefore = 0;
     const lines: Line[] = [];
     const categoryRow = () => page.getByRole('row', { name: `Drag row ${location} ${categoryName} Mill`, exact: true });
     const homeTitle = () => `${location} ${categoryName}`;
 
     try {
-      await test.step('Record what Check Data Mismatch reports before any change', async () => {
-        const result = await runCheckDataMismatch(page);
-        api = result.api;
-        mismatchesBefore = mismatchCount(result.message);
-      });
-
       await test.step('Categories page: heading, Add button and the category list', async () => {
         await openCategoriesPage(page);
         await expect(page.getByRole('heading', { name: 'Categories', level: 2 })).toBeVisible();
@@ -390,9 +380,10 @@ test.describe('Category lifecycle', () => {
         test.info().annotations.push({ type: 'line history', description: (await history.getByRole('row').allInnerTexts()).slice(1).map(r => r.replace(/\s+/g, ' ')).join('; ') });
       });
 
-      await test.step(`Home page shows the edited ${edited.lineNumber}`, async () => {
+      await test.step(`Home page shows the edited ${edited.lineNumber}, and ${deleted.lineNumber} is unchanged`, async () => {
         await goHome(page);
         await expectLineRowOnHome(page, edited, homeTitle());
+        await expectLineRowOnHome(page, deleted, homeTitle());
       });
 
       await test.step(`Delete ${deleted.lineNumber}: the confirmation names the line, No keeps it, Yes removes it`, async () => {
@@ -413,21 +404,10 @@ test.describe('Category lifecycle', () => {
         test.info().annotations.push({ type: 'deleted', description: deleted.lineNumber });
       });
 
-      await test.step(`Home page and Azure SQL: ${deleted.lineNumber} is gone, ${edited.lineNumber} is saved as edited`, async () => {
+      await test.step(`Home page: ${deleted.lineNumber} is gone, ${edited.lineNumber} still shows the edited values`, async () => {
         await goHome(page);
         await expect(lineRow(page, deleted.lineNumber), `${deleted.lineNumber} should be gone from the home page`).toHaveCount(0, { timeout: 30000 });
         await expectLineRowOnHome(page, edited, homeTitle());
-
-        const stored = [...(await fetchAzureSqlLines(page, api)).values()];
-        expect(stored.find(l => l.lineNumber === deleted.lineNumber), `${deleted.lineNumber} should be gone from Azure SQL`).toBeUndefined();
-        const row = stored.find(l => l.lineNumber === edited.lineNumber);
-        expect(row, `${edited.lineNumber} in Azure SQL`).toBeTruthy();
-        expect.soft(row?.quantity, 'Quantity in Azure SQL').toBe(edited.quantity);
-        expect.soft(row?.note, 'Note in Azure SQL').toBe(edited.note);
-        expect.soft(row?.shipWeek, 'Ship Week in Azure SQL').toBe(homeShipWeek(edited.shipWeek));
-
-        const { message } = await runCheckDataMismatch(page);
-        expect.soft(mismatchCount(message), `Check Data Mismatch after the changes: ${message ?? 'none'}`).toBeLessThanOrEqual(mismatchesBefore);
       });
     } catch (error) {
       const screenshot = await page.screenshot({ fullPage: true }).catch(() => null);

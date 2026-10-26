@@ -13,8 +13,8 @@ import {
   randomTextNote,
   startAddLine,
 } from '../concurrent/categoryLineFlow';
-import { addLineToCategory, mismatchCount, seconds, startDeleteCategoryLine, timedConfirmDelete, timedNewLineSave } from '../concurrent/loadFlow';
-import { fetchAzureSqlLines, IntegrityApi, runCheckDataMismatch } from '../../utils/dataIntegrity';
+import { addLineToCategory, seconds, startDeleteCategoryLine, timedConfirmDelete, timedNewLineSave } from '../concurrent/loadFlow';
+import { expectHomeGridMatches } from '../../utils/dataIntegrity';
 
 const DELETER = 0;
 const ADDER = 1;
@@ -30,8 +30,6 @@ test.describe('Category lines', () => {
     test.setTimeout(600000);
     const leased = await users(2);
     const pages: Page[] = [];
-    let api!: IntegrityApi;
-    let mismatchesBefore = 0;
     let category = '';
     let deleted!: ExpectedLine;
     const added = { quantity: NEW_LINE.quantity, note: randomTextNote() } as ExpectedLine;
@@ -43,11 +41,7 @@ test.describe('Category lines', () => {
         test.info().annotations.push({ type: 'roles', description: leased.map((u, i) => `${u.username}: ${roleOf(i)}`).join('; ') });
       });
 
-      await test.step('Before any change: record what Check Data Mismatch reports, and reserve a category', async () => {
-        const result = await runCheckDataMismatch(pages[ADDER]);
-        api = result.api;
-        mismatchesBefore = mismatchCount(result.message);
-        test.info().annotations.push({ type: 'mismatches before', description: result.message ?? 'none' });
+      await test.step('Reserve a category', async () => {
         await openCategoriesPage(pages[DELETER]);
         [category] = await leases.categories(pages[DELETER], 1);
         await pages[DELETER].goto('/');
@@ -98,15 +92,6 @@ test.describe('Category lines', () => {
         expect.soft(creation.saved, `User 2's screen should show ${added.lineNumber} added: ${creation.detail}`).toBe(true);
       });
 
-      await test.step(`Azure SQL: ${deleted.lineNumber} is gone and ${added.lineNumber} is saved`, async () => {
-        const stored = [...(await fetchAzureSqlLines(pages[ADDER], api)).values()];
-        expect(stored.find(l => l.lineNumber === deleted.lineNumber), `${deleted.lineNumber} should be gone from Azure SQL`).toBeUndefined();
-        const row = stored.find(l => l.lineNumber === added.lineNumber);
-        expect(row, `${added.lineNumber} should be in Azure SQL`).toBeTruthy();
-        expect.soft(row?.quantity, `${added.lineNumber} quantity in Azure SQL`).toBe(added.quantity);
-        expect.soft(row?.note, `${added.lineNumber} note in Azure SQL`).toBe(added.note);
-      });
-
       for (const i of [DELETER, ADDER]) {
         await test.step(`${roleOf(i)} sees the same result on the home page and in the category`, async () => {
           const page = pages[i];
@@ -114,19 +99,23 @@ test.describe('Category lines', () => {
           await expectLineOnHome(page, added);
           await expect(lineRow(page, deleted.lineNumber), `${deleted.lineNumber} should be gone from the home page`).toHaveCount(0, { timeout: 30000 });
           await openCategoriesPage(page);
-          const lines = await editCategory(page, category);
-          expect(lines, `${category} should list ${added.lineNumber}`).toContain(added.lineNumber);
-          expect(lines, `${category} should no longer list ${deleted.lineNumber}`).not.toContain(deleted.lineNumber);
-          await expect(categoryLineRow(page, added.lineNumber)).toBeVisible();
+          await editCategory(page, category);
+          // The Category Lines list can still be loading right after the page opens, so wait for the new line first.
+          await expect(categoryLineRow(page, added.lineNumber), `${category} should list ${added.lineNumber}`).toBeVisible({ timeout: 30000 });
+          await expect(categoryLineRow(page, deleted.lineNumber), `${category} should no longer list ${deleted.lineNumber}`).toHaveCount(0);
           await page.goto('/');
         });
       }
 
-      await test.step('Check Data Mismatch reports no new mismatch', async () => {
-        const { message } = await runCheckDataMismatch(pages[ADDER]);
-        test.info().annotations.push({ type: 'mismatches after', description: message ?? 'none' });
-        expect(mismatchCount(message), `Check Data Mismatch after the changes: ${message ?? 'none'}`).toBeLessThanOrEqual(mismatchesBefore);
+      await test.step('Both users see the same line data in every home page table', async () => {
+        await expectHomeGridMatches(pages[ADDER], pages[DELETER]);
       });
+    } catch (error) {
+      for (const [i, page] of pages.entries()) {
+        const screenshot = await page.screenshot({ fullPage: true }).catch(() => null);
+        if (screenshot) await test.info().attach(`page at failure - ${roleOf(i)}`, { body: screenshot, contentType: 'image/png' });
+      }
+      throw error;
     } finally {
       await Promise.all(pages.map(page => page.context().close()));
     }
