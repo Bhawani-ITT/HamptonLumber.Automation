@@ -1,0 +1,15 @@
+
+# Playwright
+node_modules/
+/test-results/
+/playwright-report/
+/shareable-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/
+/.auth/
+/.leases/
+.env
+.env.*
+!.env.example
+/tmp-*

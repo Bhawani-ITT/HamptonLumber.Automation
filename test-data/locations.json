@@ -1,0 +1,12 @@
+[
+  {
+    "name": "Hampton Lumber - Portland",
+    "address": "123 Main St, Portland, OR",
+    "code": "PDX01"
+  },
+  {
+    "name": "Hampton Lumber - Seattle",
+    "address": "456 Pine Ave, Seattle, WA",
+    "code": "SEA01"
+  }
+]

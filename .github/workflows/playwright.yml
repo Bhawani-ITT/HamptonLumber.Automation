@@ -1,0 +1,56 @@
+name: Playwright Tests
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Pull requests from forks get no secrets and must not reach the Key Vault.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      BASE_URL: ${{ vars.BASE_URL }}
+      KEY_VAULT_URL: ${{ vars.KEY_VAULT_URL }}
+      TEST_ENV: ${{ vars.TEST_ENV }}
+      TEST_USER_POOL_PREFIX: ${{ vars.TEST_USER_POOL_PREFIX }}
+      TEST_USER_POOL_DOMAIN: ${{ vars.TEST_USER_POOL_DOMAIN }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+    - uses: actions/setup-node@v4
+      with:
+        node-version: lts/*
+    - name: Install dependencies
+      run: npm ci
+    - name: Install Playwright Browsers
+      run: npx playwright install --with-deps
+    - name: Sign in to Azure (OIDC, no stored secret)
+      uses: azure/login@v2
+      with:
+        client-id: ${{ vars.AZURE_CLIENT_ID }}
+        tenant-id: ${{ vars.AZURE_TENANT_ID }}
+        subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    - name: Run Playwright tests
+      run: npx playwright test
+    - uses: actions/upload-artifact@v4
+      if: ${{ !cancelled() }}
+      with:
+        name: playwright-report
+        path: playwright-report/
+        retention-days: 7
+    - uses: actions/upload-artifact@v4
+      if: ${{ !cancelled() }}
+      with:
+        name: shareable-test-report
+        path: shareable-report/test-report.html
+        retention-days: 30

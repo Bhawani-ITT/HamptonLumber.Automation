@@ -1,0 +1,26 @@
+{
+  "name": "hamptonlumber.automation",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "playwright test",
+    "test:smoke": "playwright test tests/smoke",
+    "test:regression": "playwright test tests/regression",
+    "test:concurrent": "playwright test tests/concurrent",
+    "test:headed": "playwright test --headed",
+    "report": "playwright show-report"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^26.6.5",
+    "dotenv": "^18.0.7"
+  },
+  "dependencies": {
+    "@azure/identity": "^4.13.3",
+    "@azure/keyvault-secrets": "^4.11.2"
+  }
+}

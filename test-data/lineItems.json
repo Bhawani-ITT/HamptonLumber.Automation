@@ -1,0 +1,14 @@
+[
+  {
+    "itemCode": "LI-1001",
+    "description": "2x4x8 Stud",
+    "quantity": 100,
+    "unitPrice": 3.5
+  },
+  {
+    "itemCode": "LI-1002",
+    "description": "4x8 Plywood Sheet",
+    "quantity": 50,
+    "unitPrice": 42.0
+  }
+]
