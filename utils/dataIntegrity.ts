@@ -99,6 +99,47 @@ export async function readHomeGridLines(page: Page): Promise<HomeGridLine[]> {
   return lines.map(line => ({ ...line, note: collapseWhitespace(line.note) }));
 }
 
+export function compareHomeGridLines(reference: HomeGridLine[], actual: HomeGridLine[]): string[] {
+  const differences: string[] = [];
+  if (reference.length === 0) differences.push('Reference home grid has no lines');
+  if (actual.length === 0) differences.push('Home grid has no lines');
+  const referenceLines = new Map(reference.map(line => [line.guid, line]));
+  const actualLines = new Map(actual.map(line => [line.guid, line]));
+  for (const line of reference) {
+    const other = actualLines.get(line.guid);
+    if (!other) {
+      differences.push(`${line.lineNumber} is missing from the home grid`);
+      continue;
+    }
+    for (const field of ['lineNumber', 'quantity', 'shipWeek', 'note'] as const) {
+      if (line[field] !== other[field]) {
+        differences.push(`${line.lineNumber} ${field}: reference="${line[field]}" actual="${other[field]}"`);
+      }
+    }
+  }
+  for (const line of actual) {
+    if (!referenceLines.has(line.guid)) differences.push(`${line.lineNumber} is an extra line in the home grid`);
+  }
+  return differences;
+}
+
+export async function expectHomeGridMatches(page: Page, referencePage: Page): Promise<void> {
+  await expect(async () => {
+    const [reference, actual] = await Promise.all([readHomeGridLines(referencePage), readHomeGridLines(page)]);
+    expect(compareHomeGridLines(reference, actual), 'Home-page line data differs across users').toEqual([]);
+  }).toPass({ timeout: 30000 });
+}
+
+export async function readSettledHomeLine(page: Page, lineNumber: string, quantities: string[]): Promise<HomeGridLine> {
+  let line: HomeGridLine | undefined;
+  await expect(async () => {
+    line = (await readHomeGridLines(page)).find(candidate => candidate.lineNumber === lineNumber);
+    expect(line, `${lineNumber} is missing from the home page`).toBeDefined();
+    expect(quantities, `${lineNumber} quantity on the home page`).toContain(line?.quantity);
+  }).toPass({ timeout: 30000 });
+  return line!;
+}
+
 /** Lists every field where the home page differs from Azure SQL, e.g. `JSM101 quantity: screen="25" azure sql="362"`. */
 export function compareWithAzureSql(grid: HomeGridLine[], sql: Map<string, AzureSqlLine>): string[] {
   const differences: string[] = [];

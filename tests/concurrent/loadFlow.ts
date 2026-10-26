@@ -12,7 +12,6 @@ import {
   saveNewLine,
   startAddLine,
 } from './categoryLineFlow';
-import { MISMATCH_TOAST } from '../../utils/dataIntegrity';
 
 // Logging everyone in at once can trip Microsoft sign-in throttling.
 export const LOGIN_BATCH_SIZE = 10;
@@ -101,7 +100,6 @@ export type TimedResult = { saved: boolean; ms: number; detail: string };
 
 export const range = (from: number, count: number) => Array.from({ length: count }, (_, i) => from + i);
 export const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
-export const mismatchCount = (message: string | null) => Number(message?.match(MISMATCH_TOAST)?.[1] ?? 0);
 
 /** First line of an error plus Playwright's Expected/Received lines, so a failure says what was actually on screen. */
 function describeError(error: unknown): string {

@@ -56,8 +56,8 @@ export default defineConfig({
     },
 
     {
-      name: 'firefox',
-      use: { ...devices['Desktop Firefox'], storageState: STORAGE_STATE_PATH },
+      name: 'microsoft-edge',
+      use: { ...devices['Desktop Edge'], channel: 'msedge', storageState: STORAGE_STATE_PATH },
       dependencies: ['setup'],
     },
 
@@ -72,10 +72,6 @@ export default defineConfig({
     // },
 
     /* Test against branded browsers. */
-    // {
-    //   name: 'Microsoft Edge',
-    //   use: { ...devices['Desktop Edge'], channel: 'msedge' },
-    // },
     // {
     //   name: 'Google Chrome',
     //   use: { ...devices['Desktop Chrome'], channel: 'chrome' },

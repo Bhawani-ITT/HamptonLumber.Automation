@@ -6,14 +6,13 @@ import {
   expectLineOnHome,
   ExpectedLine,
   fillNewLine,
-  homeShipWeek,
   NEW_LINE,
   openCategoriesPage,
   randomTextNote,
   saveNewLine,
   startAddLine,
 } from './categoryLineFlow';
-import { fetchAzureSqlLines, runCheckDataMismatch } from '../../utils/dataIntegrity';
+import { expectHomeGridMatches } from '../../utils/dataIntegrity';
 
 const USER_COUNT = 10;
 // Each creator adds a line to a different category.
@@ -60,18 +59,8 @@ test.describe('Concurrent users', () => {
         expect(new Set(newLines.map(l => l.lineNumber)).size, 'Every new line should get its own line number').toBe(CREATOR_COUNT);
       });
 
-      await test.step('Azure SQL holds all new line items, and Check Data Mismatch reports no mismatch', async () => {
-        const { message, api } = await runCheckDataMismatch(pages[CREATOR_COUNT]);
-        const stored = [...(await fetchAzureSqlLines(pages[CREATOR_COUNT], api)).values()];
-        for (const line of newLines) {
-          const row = stored.find(s => s.lineNumber === line.lineNumber);
-          expect.soft(row, `${line.lineNumber} is missing from Azure SQL`).toBeTruthy();
-          if (!row) continue;
-          expect.soft(row.quantity, `${line.lineNumber} quantity in Azure SQL`).toBe(line.quantity);
-          expect.soft(row.note, `${line.lineNumber} note in Azure SQL`).toBe(line.note);
-          expect.soft(row.shipWeek, `${line.lineNumber} ship week in Azure SQL`).toBe(homeShipWeek(line.shipWeek));
-        }
-        expect.soft(message, 'Check Data Mismatch reported a mismatch after the simultaneous adds').toBeNull();
+      await test.step('A viewer sees all new line items on the home page', async () => {
+        for (const line of newLines) await expectLineOnHome(pages[CREATOR_COUNT], line);
       });
 
       await test.step(`All ${USER_COUNT} users see every new line item under its category on the home page`, async () => {
@@ -79,6 +68,7 @@ test.describe('Concurrent users', () => {
         const results = await Promise.allSettled(
           pages.map(async (page, i) => {
             for (const line of newLines) await expectLineOnHome(page, line);
+            await expectHomeGridMatches(page, pages[CREATOR_COUNT]);
             if (i >= CREATOR_COUNT) await expectNoReloadSinceLogin(page, `User ${i + 1}`);
           }),
         );

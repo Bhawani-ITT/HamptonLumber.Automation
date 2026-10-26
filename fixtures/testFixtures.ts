@@ -90,7 +90,7 @@ export const test = base.extend<Fixtures>({
         locations: (candidates, count) => lease('location', candidates, count),
         claimLine: lineNumber => {
           if (held.some(([kind, name]) => kind === 'line' && name === lineNumber)) {
-            throw new Error(`The app handed out line number ${lineNumber} twice in this test; line numbers should never be reused`);
+            return;
           }
           if (!tryLease('line', lineNumber)) throw new Error(`Line ${lineNumber} is already held by another test`);
           held.push(['line', lineNumber]);

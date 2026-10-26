@@ -67,8 +67,11 @@ export async function enterQuantity(page: Page, quantity: string): Promise<void>
   await quantityInput(page).fill(quantity);
   await quantityInput(page).press('Tab');
   await expect(quantityInput(page)).toHaveValue(quantity);
-  await saveChangesButton(page).scrollIntoViewIfNeeded();
-  await expect(saveChangesButton(page)).toBeEnabled();
+  await expect(async () => {
+    await saveChangesButton(page).scrollIntoViewIfNeeded({ timeout: 5000 });
+    await expect(saveChangesButton(page)).toBeEnabled({ timeout: 5000 });
+    await expect(quantityInput(page)).toHaveValue(quantity);
+  }).toPass({ timeout: 30000 });
 }
 
 /** Clicks Save Changes and waits for the success toast or the redirect back to the home page. */
@@ -76,11 +79,8 @@ export async function saveAndExpectSuccess(page: Page): Promise<void> {
   await saveChangesButton(page).scrollIntoViewIfNeeded();
   await expect(saveChangesButton(page)).toBeEnabled();
   await saveChangesButton(page).click();
-  // Another editor's "Mill line number X has been updated" alert can replace the success toast straight away,
-  // so the redirect back to the home page also counts as a successful save.
-  await expect(
-    page.getByText(/line detail updated successfully/i).filter({ visible: true }).or(dataTables(page).first()).first(),
-  ).toBeVisible({ timeout: 15000 });
+  await expect(page).not.toHaveURL(/\/edit\//, { timeout: 30000 });
+  await expect(dataTables(page).first()).toBeVisible({ timeout: 60000 });
 }
 
 export function randomQuantity(...exclude: number[]): string {

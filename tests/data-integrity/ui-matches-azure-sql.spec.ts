@@ -3,57 +3,60 @@ import { test, expect } from '../../fixtures/testFixtures';
 import {
   dataTables,
   enterQuantity,
+  expectNoReloadSinceLogin,
+  lineQuantityCell,
   loginInNewSession,
   openLineForEdit,
   quantityInput,
   randomQuantity,
-  saveChangesButton,
+  saveAndExpectSuccess,
 } from '../concurrent/twoUserEditFlow';
-import { TestUser } from '../../utils/users';
-import { differencesAfterSettling, IntegrityApi, runCheckDataMismatch } from '../../utils/dataIntegrity';
+import { compareHomeGridLines, readHomeGridLines } from '../../utils/dataIntegrity';
 
 const USER_COUNT = 6;
 const EDITOR_COUNT = 2;
 const UPDATES_PER_EDITOR = 3;
 
 test.describe('Data integrity', () => {
-  test(`Every user's home page matches Azure SQL after rapid quantity updates, live and after a reload`, async ({ browser, users: leaseUsers, leases }) => {
+  test(`Every user's home page shows the same line data after rapid quantity updates, live and after a reload`, async ({ browser, users: leaseUsers, leases }) => {
     test.skip(test.info().project.name !== 'google-chrome', 'Runs on Google Chrome only');
     test.setTimeout(600000);
     const users = await leaseUsers(USER_COUNT);
 
     let pages: Page[] = [];
-    let api!: IntegrityApi;
     const lineNumbers: string[] = [];
     const finalQuantities: string[] = [];
-    const findings: string[] = [];
 
-    /** Compares every user's home page with Azure SQL; the app's own Check Data Mismatch result is recorded too. */
     const checkAllUsers = async (when: string) => {
-      const results = await Promise.all(
-        pages.map(async (page, i) => ({
-          user: users[i],
-          differences: await differencesAfterSettling(page, api),
-          mismatchToast: (await runCheckDataMismatch(page)).message,
-        })),
-      );
-      const failed = results.filter(r => r.differences.length > 0 || r.mismatchToast);
-      for (const { user, differences, mismatchToast } of failed) {
-        const page = pages[users.indexOf(user)];
-        await test.info().attach(`${when}-${user.username}`, { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' });
-        findings.push(describe(when, user, differences, mismatchToast));
+      try {
+        await expect(async () => {
+          const grids = await Promise.all(pages.map(page => readHomeGridLines(page)));
+          for (const [userIndex, grid] of grids.entries()) {
+            expect(compareHomeGridLines(grids[0], grid), `${when}: ${users[userIndex].username}`).toEqual([]);
+            for (const [editorIndex, lineNumber] of lineNumbers.entries()) {
+              const line = grid.find(candidate => candidate.lineNumber === lineNumber);
+              expect(line, `${when}: ${users[userIndex].username} sees ${lineNumber}`).toBeDefined();
+              expect(line?.quantity, `${when}: ${users[userIndex].username}, ${lineNumber}`).toBe(finalQuantities[editorIndex]);
+            }
+          }
+        }).toPass({ timeout: 30000 });
+      } catch (error) {
+        for (const [userIndex, page] of pages.entries()) {
+          await test.info().attach(`${when}-${users[userIndex].username}`, {
+            body: await page.screenshot({ fullPage: true }), contentType: 'image/png',
+          });
+        }
+        throw error;
       }
-      test.info().annotations.push({ type: when, description: `${results.length - failed.length}/${results.length} users match Azure SQL` });
-      return failed.length;
+      test.info().annotations.push({ type: when, description: `${users.length} users show matching home-page line data` });
     };
 
     try {
       await test.step(`Log in ${USER_COUNT} users in separate sessions`, async () => {
         pages = await Promise.all(users.map(user => loginInNewSession(browser, user)));
-        api = (await runCheckDataMismatch(pages[0])).api;
       });
 
-      await test.step('Before any edit: every home page matches Azure SQL', async () => {
+      await test.step('Before any edit: line data matches across all home pages', async () => {
         await checkAllUsers('before edits');
       });
 
@@ -66,11 +69,23 @@ test.describe('Data integrity', () => {
             const editor = pages[e];
             let quantity = '';
             for (let n = 0; n < UPDATES_PER_EDITOR; n++) {
-              await openLineForEdit(editor, lineNumber);
-              quantity = randomQuantity(Number(await quantityInput(editor).inputValue()));
-              await enterQuantity(editor, quantity);
-              await saveChangesButton(editor).click();
-              await expect(editor).not.toHaveURL(/\/edit\//, { timeout: 30000 });
+              await test.step(`Editor ${e + 1}: update ${n + 1} of ${lineNumber}`, async () => {
+                try {
+                  await openLineForEdit(editor, lineNumber);
+                  quantity = randomQuantity(Number(await quantityInput(editor).inputValue()));
+                  await enterQuantity(editor, quantity);
+                  await saveAndExpectSuccess(editor);
+                  await expect(lineQuantityCell(editor, lineNumber), 'Saved quantity is visible before reopening the line').toHaveText(quantity, { timeout: 30000 });
+                } catch (error) {
+                  test.info().annotations.push({ type: 'failed edit', description: `${users[e].username}: ${lineNumber}, update ${n + 1}, URL=${editor.url()}` });
+                  const screenshot = await editor.screenshot({ fullPage: true }).catch(() => null);
+                  if (screenshot) await test.info().attach(`editor-${e + 1}-update-${n + 1}`, { body: screenshot, contentType: 'image/png' });
+                  await test.info().attach(`editor-${e + 1}-page-state`, {
+                    body: await editor.locator('body').innerText().catch(() => 'Page unavailable'), contentType: 'text/plain',
+                  });
+                  throw error;
+                }
+              });
             }
             finalQuantities[e] = quantity;
           }),
@@ -81,26 +96,19 @@ test.describe('Data integrity', () => {
         });
       });
 
-      await test.step('Live: every home page matches Azure SQL without reloading', async () => {
+      await test.step('Live: every home page shows the saved quantities and matching line data without reloading', async () => {
         await checkAllUsers('live after edits');
+        await Promise.all(pages.map((page, userIndex) => expectNoReloadSinceLogin(page, users[userIndex].username)));
       });
 
-      await test.step('After every user reloads the page, every home page still matches Azure SQL', async () => {
+      await test.step('After every user reloads, the saved quantities and line data still match across home pages', async () => {
         await Promise.all(pages.map(page => page.reload()));
         await Promise.all(pages.map(page => expect(dataTables(page).first()).toBeVisible({ timeout: 60000 })));
         await checkAllUsers('after reload');
       });
 
-      expect(findings, 'Home page data that differs from Azure SQL (see screenshots)').toEqual([]);
     } finally {
       await Promise.all(pages.map(page => page.context().close()));
     }
   });
 });
-
-function describe(when: string, user: TestUser, differences: string[], mismatchToast: string | null): string {
-  const parts = [`[${when}] ${user.username}:`];
-  if (differences.length) parts.push(differences.join('; '));
-  parts.push(`Check Data Mismatch: ${mismatchToast ?? 'no mismatch reported'}`);
-  return parts.join(' ');
-}

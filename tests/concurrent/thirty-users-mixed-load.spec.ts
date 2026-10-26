@@ -2,8 +2,8 @@ import { Page } from '@playwright/test';
 import { test, expect } from '../../fixtures/testFixtures';
 import { backToList, dataTables, enterQuantity, expectNoReloadSinceLogin, lineQuantityCell, openLineForEdit, quantityInput, randomQuantity } from './twoUserEditFlow';
 import { editCategory, expectLineOnHome, ExpectedLine, fillNewLine, NEW_LINE, openCategoriesPage, randomTextNote, startAddLine } from './categoryLineFlow';
-import { fetchAzureSqlLines, IntegrityApi, runCheckDataMismatch } from '../../utils/dataIntegrity';
-import { LOGIN_BATCH_SIZE, loginInBatches, mismatchCount, range, SAVE_TIMEOUT_MS, seconds, timedEditSave, timedNewLineSave, userChecker } from './loadFlow';
+import { expectHomeGridMatches, readSettledHomeLine } from '../../utils/dataIntegrity';
+import { LOGIN_BATCH_SIZE, loginInBatches, range, SAVE_TIMEOUT_MS, seconds, timedEditSave, timedNewLineSave, userChecker } from './loadFlow';
 
 // Roles by position in the leased user list.
 const SAME_LINE_EDITORS = 2;
@@ -40,8 +40,6 @@ test.describe('Concurrent users', () => {
       const users = await leaseUsers(USER_COUNT);
 
       let pages: Page[] = [];
-      let api!: IntegrityApi;
-      let mismatchesBefore = 0;
       /** Line each editor edits: both same-line editors share the first one. */
       let editedLines: string[] = [];
       const lineOfEditor = (e: number) => editedLines[Math.max(0, e - SAME_LINE_EDITORS + 1)];
@@ -59,11 +57,8 @@ test.describe('Concurrent users', () => {
           test.info().annotations.push({ type: 'roles', description: users.map((u, i) => `${u.username}: ${roleOf(i)}`).join('; ') });
         });
 
-        await test.step('Before any change: record what Check Data Mismatch reports', async () => {
-          const { message, api: integrityApi } = await runCheckDataMismatch(pages[FIRST_VIEWER]);
-          api = integrityApi;
-          mismatchesBefore = mismatchCount(message);
-          test.info().annotations.push({ type: 'mismatches before', description: message ?? 'none' });
+        await test.step('Before any change: home-page line data matches across users', async () => {
+          await checkUsers(everyone, 'initial home-page data matches', page => expectHomeGridMatches(page, pages[FIRST_VIEWER]));
         });
 
         await test.step(`Pick ${UNIQUE_LINE_EDITORS + 1} line items: one shared by ${SAME_LINE_EDITORS} editors, one for each other editor`, async () => {
@@ -138,29 +133,11 @@ test.describe('Concurrent users', () => {
           expect(new Set(newLines.map(l => l.lineNumber)).size, 'Every new line should get its own line number').toBe(CREATORS);
         });
 
-        await test.step(`Azure SQL holds one of the two quantities for ${sameLine}, every other change, and no new mismatch`, async () => {
-          const stored = [...(await fetchAzureSqlLines(pages[FIRST_VIEWER], api)).values()];
-          const storedLine = (lineNumber: string) => stored.find(s => s.lineNumber === lineNumber);
-
+        await test.step(`A viewer sees one of the two saved quantities for ${sameLine} on the home page`, async () => {
           const sameLineQuantities = range(0, SAME_LINE_EDITORS).map(e => enteredQuantity[e]);
-          const finalQuantity = storedLine(sameLine)?.quantity ?? '';
-          expect(sameLineQuantities, `${sameLine} in Azure SQL should hold one of the quantities its editors saved`).toContain(finalQuantity);
+          const { quantity: finalQuantity } = await readSettledHomeLine(pages[FIRST_VIEWER], sameLine, sameLineQuantities);
           expectedQuantity.set(sameLine, finalQuantity);
-          test.info().annotations.push({ type: `same line ${sameLine} result`, description: `Azure SQL kept ${finalQuantity} (entered: ${sameLineQuantities.join(' and ')})` });
-
-          for (const [lineNumber, quantity] of expectedQuantity) {
-            expect.soft(storedLine(lineNumber)?.quantity, `${lineNumber} quantity in Azure SQL`).toBe(quantity);
-          }
-          for (const line of newLines) {
-            const row = storedLine(line.lineNumber);
-            expect.soft(row, `${line.lineNumber} is missing from Azure SQL`).toBeTruthy();
-            expect.soft(row?.quantity, `${line.lineNumber} quantity in Azure SQL`).toBe(line.quantity);
-            expect.soft(row?.note, `${line.lineNumber} note in Azure SQL`).toBe(line.note);
-          }
-
-          const { message } = await runCheckDataMismatch(pages[FIRST_VIEWER]);
-          test.info().annotations.push({ type: 'mismatches after', description: message ?? 'none' });
-          expect.soft(mismatchCount(message), `Check Data Mismatch after the changes: ${message ?? 'none'}`).toBeLessThanOrEqual(mismatchesBefore);
+          test.info().annotations.push({ type: `same line ${sameLine} result`, description: `Home page shows ${finalQuantity} (entered: ${sameLineQuantities.join(' and ')})` });
         });
 
         await test.step(`The ${WATCHERS} watchers see the saved quantity on their open edit page without reloading`, async () => {
@@ -185,6 +162,7 @@ test.describe('Concurrent users', () => {
               await expect(lineQuantityCell(page, lineNumber), `${lineNumber} Qty`).toHaveText(quantity, { timeout: 30000 });
             }
             for (const line of newLines) await expectLineOnHome(page, line);
+            await expectHomeGridMatches(page, pages[FIRST_VIEWER]);
             // Creators returned to the home page with a full page load.
             if (!creatorIndexes.includes(i)) await expectNoReloadSinceLogin(page, roleOf(i));
           });

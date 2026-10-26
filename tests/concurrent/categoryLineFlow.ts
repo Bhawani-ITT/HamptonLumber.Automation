@@ -76,8 +76,13 @@ export async function openCategoriesPage(page: Page): Promise<void> {
 
 /** Clicks Edit on the category (Categories page must be open). Returns its existing line numbers. */
 export async function editCategory(page: Page, category: string): Promise<string[]> {
-  await page.getByRole('row', { name: `Drag row ${category}`, exact: true }).getByRole('button', { name: 'Edit' }).click();
-  await expect(page.getByRole('heading', { name: 'Category Lines' })).toBeVisible({ timeout: 30000 });
+  const heading = page.getByRole('heading', { name: 'Category Lines' });
+  await expect(async () => {
+    if (!(await heading.isVisible())) {
+      await page.getByRole('row', { name: `Drag row ${category}`, exact: true }).getByRole('button', { name: 'Edit' }).click({ timeout: 5000 });
+    }
+    await expect(heading).toBeVisible({ timeout: 10000 });
+  }).toPass({ timeout: 60000 });
   await expect(page.getByRole('button', { name: 'Add', exact: true })).toBeVisible();
   const texts = await page
     .getByRole('grid', { name: 'Data table' })
@@ -99,13 +104,10 @@ export async function deleteCategoryLine(page: Page, lineNumber: string): Promis
   await expect(row).toHaveCount(0, { timeout: 30000 });
 }
 
-/** Clicks Add on the category page and returns the line number the app assigns to the new line. */
-/**
- * Running number at the end of a line number, e.g. 161 for TLC161. New line numbers only go up: the app never hands
- * out a deleted line's number again.
- */
+/** Running number at the end of a line number, e.g. 161 for TLC161. */
 export const lineSequence = (lineNumber: string) => Number(lineNumber.match(/(\d+)$/)?.[1] ?? NaN);
 
+/** Clicks Add on the category page and returns the line number the app assigns to the new line. */
 export async function startAddLine(page: Page): Promise<string> {
   await page.getByRole('button', { name: 'Add', exact: true }).click();
   await expect(page.getByRole('heading', { name: /Line Detail/ })).toBeVisible({ timeout: 30000 });

@@ -2,13 +2,12 @@ import { Page } from '@playwright/test';
 import { test, expect } from '../../fixtures/testFixtures';
 import { backToList, dataTables, enterQuantity, expectNoReloadSinceLogin, lineQuantityCell, lineRow, openLineForEdit, quantityInput, randomQuantity } from './twoUserEditFlow';
 import { editCategory, expectLineOnHome, ExpectedLine, fillNewLine, NEW_LINE, noteInput, openCategoriesPage, randomTextNote, startAddLine } from './categoryLineFlow';
-import { fetchAzureSqlLines, IntegrityApi, runCheckDataMismatch } from '../../utils/dataIntegrity';
+import { expectHomeGridMatches } from '../../utils/dataIntegrity';
 import {
   addLineToCategory,
   goHome,
   LOGIN_BATCH_SIZE,
   loginInBatches,
-  mismatchCount,
   range,
   reportTimes,
   SAVE_TIMEOUT_MS,
@@ -65,8 +64,6 @@ test.describe('Concurrent users', () => {
         const loggedIn = await loginInBatches(browser, indexes.map(i => users[i]));
         indexes.forEach((i, n) => (pages[i] = loggedIn[n]));
       };
-      let api!: IntegrityApi;
-      let mismatchesBefore = 0;
       /** The creators' categories, then the deleters'. */
       let categories: string[] = [];
       const deleterCategory = (d: number) => categories[CREATORS + d];
@@ -86,11 +83,8 @@ test.describe('Concurrent users', () => {
           await logIn([...creatorIndexes, ...deleterIndexes]);
         });
 
-        await test.step('Before any change: record what Check Data Mismatch reports', async () => {
-          const { message, api: integrityApi } = await runCheckDataMismatch(pages[0]);
-          api = integrityApi;
-          mismatchesBefore = mismatchCount(message);
-          test.info().annotations.push({ type: 'mismatches before', description: message ?? 'none' });
+        await test.step('Before any change: home-page line data matches across logged-in users', async () => {
+          await checkUsers([...creatorIndexes, ...deleterIndexes], 'initial home-page data matches', page => expectHomeGridMatches(page, pages[0]));
         });
 
         await test.step(`Reserve ${count(EXISTING_LINE_EDITORS, 'existing line item')} and ${CREATORS + DELETERS} categories in different locations`, async () => {
@@ -180,21 +174,20 @@ test.describe('Concurrent users', () => {
             const screenshot = await pages[i].screenshot({ fullPage: true }).catch(() => null);
             if (screenshot) await test.info().attach(`unconfirmed ${what} (${roleOf(i)})`, { body: screenshot, contentType: 'image/png' });
           }
-          // Whether the change really happened is checked in Azure SQL next; here only the on-screen confirmation is judged.
           expect
             .soft(unconfirmed.map(u => `${u.what}: ${u.detail}`), `The app should confirm every edit, create and delete within ${SAVE_TIMEOUT_MS / 1000}s`)
             .toEqual([]);
         });
 
-        await test.step('Azure SQL holds the result of every edit, create and delete from that moment', async () => {
-          const stored = [...(await fetchAzureSqlLines(pages[FIRST_VIEWER], api)).values()];
-          const storedLine = (lineNumber: string) => stored.find(s => s.lineNumber === lineNumber);
-          const wrong = [
-            ...existingLines.flatMap(l => (storedLine(l)?.quantity === expectedQuantity.get(l) ? [] : [`${l} quantity is ${storedLine(l)?.quantity}, expected ${expectedQuantity.get(l)}`])),
-            ...newLines.flatMap(l => (storedLine(l.lineNumber) ? [] : [`new line ${l.lineNumber} is missing`])),
-            ...doomedLines.flatMap(l => (storedLine(l.lineNumber) ? [`deleted line ${l.lineNumber} is still there`] : [])),
-          ];
-          expect(wrong, 'Azure SQL after the concurrent edits, creates and deletes').toEqual([]);
+        await test.step('Viewers see every concurrent edit, create and delete on the home page', async () => {
+          await checkUsers(viewerIndexes, 'viewers see concurrent changes', async page => {
+            for (const lineNumber of existingLines) {
+              await expect(lineQuantityCell(page, lineNumber)).toHaveText(expectedQuantity.get(lineNumber)!, { timeout: 30000 });
+            }
+            for (const line of newLines) await expectLineOnHome(page, line);
+            for (const line of doomedLines) await expect(lineRow(page, line.lineNumber)).toHaveCount(0, { timeout: 30000 });
+            await expectHomeGridMatches(page, pages[FIRST_VIEWER]);
+          });
         });
 
         await test.step('Editors, creators and deleters go back to the home page', async () => {
@@ -225,25 +218,6 @@ test.describe('Concurrent users', () => {
           await Promise.all(newLineEditorIndexes.map(i => backToList(pages[i])));
         });
 
-        await test.step('Azure SQL holds every edit and new line, no deleted line, and Check Data Mismatch finds nothing new', async () => {
-          const stored = [...(await fetchAzureSqlLines(pages[FIRST_VIEWER], api)).values()];
-          const storedLine = (lineNumber: string) => stored.find(s => s.lineNumber === lineNumber);
-          for (const lineNumber of existingLines) {
-            expect.soft(storedLine(lineNumber)?.quantity, `${lineNumber} quantity in Azure SQL`).toBe(expectedQuantity.get(lineNumber));
-          }
-          for (const line of newLines) {
-            const row = storedLine(line.lineNumber);
-            expect.soft(row, `${line.lineNumber} should be in Azure SQL`).toBeTruthy();
-            expect.soft(row?.quantity, `${line.lineNumber} quantity in Azure SQL`).toBe(line.quantity);
-            expect.soft(row?.note, `${line.lineNumber} note in Azure SQL`).toBe(line.note);
-          }
-          for (const line of doomedLines) expect.soft(storedLine(line.lineNumber), `${line.lineNumber} should be gone from Azure SQL`).toBeUndefined();
-
-          const { message } = await runCheckDataMismatch(pages[FIRST_VIEWER]);
-          test.info().annotations.push({ type: 'mismatches after', description: message ?? 'none' });
-          expect.soft(mismatchCount(message), `Check Data Mismatch after the changes: ${message ?? 'none'}`).toBeLessThanOrEqual(mismatchesBefore);
-        });
-
         await test.step(`All ${USER_COUNT} users see every edit and new line item, and none of the deleted ones`, async () => {
           await checkUsers(everyone, 'everyone sees the final data', async (page, i) => {
             await expect(page).not.toHaveURL(/\/edit\//, { timeout: 30000 });
@@ -253,6 +227,7 @@ test.describe('Concurrent users', () => {
             }
             for (const line of newLines) await expectLineOnHome(page, line);
             for (const line of doomedLines) await expect(lineRow(page, line.lineNumber), `${line.lineNumber} should be gone`).toHaveCount(0, { timeout: 30000 });
+            await expectHomeGridMatches(page, pages[FIRST_VIEWER]);
             // Creators and deleters returned to the home page with a full page load.
             if (!creatorIndexes.includes(i) && !deleterIndexes.includes(i)) await expectNoReloadSinceLogin(page, roleOf(i));
           });
