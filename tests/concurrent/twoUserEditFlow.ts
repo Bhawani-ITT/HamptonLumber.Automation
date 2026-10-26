@@ -22,9 +22,22 @@ export async function loginInNewSession(
     baseURL: process.env.BASE_URL,
     storageState: { cookies: [], origins: [] },
   });
+  let page: Page | undefined;
+  const failures: string[] = [];
   try {
     await prepareContext?.(context);
-    const page = await context.newPage();
+    page = await context.newPage();
+    page.on('close', () => failures.push('Login page closed before cleanup'));
+    page.on('crash', () => failures.push('Login page crashed'));
+    context.on('page', openedPage => {
+      failures.push('Another page opened in the login context');
+      openedPage.on('close', () => failures.push('Additional login page closed'));
+    });
+    page.on('pageerror', error => failures.push(error.message));
+    page.on('requestfailed', request => {
+      const url = new URL(request.url());
+      failures.push(`${request.method()} ${url.origin}${url.pathname}: ${request.failure()?.errorText}`);
+    });
     const loginPage = new LoginPage(page);
     await loginPage.goto();
     await loginPage.login(user.username, user.password);
@@ -33,6 +46,25 @@ export async function loginInNewSession(
     await page.evaluate(() => ((window as any).__loadedOnceMarker = true));
     return page;
   } catch (error) {
+    if (page) {
+      const url = new URL(page.url());
+      await test.info().attach(`login-failure-${user.username}`, {
+        body: JSON.stringify({
+          browserVersion: browser.version(),
+          browserConnected: browser.isConnected(),
+          pageClosed: page.isClosed(),
+          contextPages: context.pages().map(contextPage => {
+            const contextUrl = new URL(contextPage.url());
+            return `${contextUrl.origin}${contextUrl.pathname}`;
+          }),
+          userAgent: page.isClosed() ? 'Page closed' : await page.evaluate(() => navigator.userAgent).catch(() => 'Unavailable'),
+          url: `${url.origin}${url.pathname}`,
+          failures,
+          pageText: page.isClosed() ? 'Page closed' : await page.locator('body').innerText({ timeout: 3000 }).catch(() => 'Unavailable'),
+        }, null, 2),
+        contentType: 'application/json',
+      });
+    }
     await context.close().catch(() => {});
     throw error;
   }
